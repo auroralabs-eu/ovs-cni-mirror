@@ -21,11 +21,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"strings"
 
 	"github.com/imdario/mergo"
 	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/types"
-	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/utils"
 )
 
 // LoadConf parses and validates stdin netconf and returns NetConf object
@@ -43,26 +41,6 @@ func LoadConf(data []byte) (*types.NetConf, error) {
 		return nil, err
 	}
 	return netconf, nil
-}
-
-// LoadConfFromCache retrieve net config from cache
-func LoadConfFromCache(cRef string) (*types.CachedNetConf, error) {
-	netCache := &types.CachedNetConf{}
-	netConfBytes, err := utils.ReadCache(cRef)
-	if err != nil {
-		return nil, fmt.Errorf("error reading cached NetConf with name %s: %v", cRef, err)
-	}
-
-	if err = json.Unmarshal(netConfBytes, netCache); err != nil {
-		return nil, fmt.Errorf("failed to parse NetConf: %v", err)
-	}
-
-	return netCache, nil
-}
-
-// GetCRef unique identifier for a container interface
-func GetCRef(cid, podIfName string) string {
-	return strings.Join([]string{cid, podIfName}, "-")
 }
 
 func loadNetConf(bytes []byte) (*types.NetConf, error) {

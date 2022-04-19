@@ -41,12 +41,3 @@ type Mirror struct {
 	Ingress bool   `json:"ingress,omitempty"`
 	Egress  bool   `json:"egress,omitempty"`
 }
-
-// CachedNetConf containing NetConfig and original smartnic vf interface
-// name (set only in case of ovs hareware offload scenario).
-// this is intended to be used only for storing and retrieving config
-// to/from a data store (example file cache).
-type CachedNetConf struct {
-	Netconf    *NetConf
-	OrigIfName string
-}

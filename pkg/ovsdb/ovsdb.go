@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
 	"go.uber.org/zap"
 
@@ -185,13 +184,38 @@ func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("DeleteMirror - row: %#v", row)
+	logger.Infof("DeleteMirror - row: %#v", row)
+
+	mirrorUUID := row["_uuid"].(ovsdb.UUID)
+	logger.Infof("DeleteMirror - mirrorUUID %#v", mirrorUUID)
 
 	selectSrcPorts := row["select_src_port"].(ovsdb.OvsSet).GoSet
 	selectDstPorts := row["select_dst_port"].(ovsdb.OvsSet).GoSet
 
-	if len(selectSrcPorts) == 0 && len(selectDstPorts) == 0 && row["output_port"] = "" {
-		deleteOp := ovsd.deleteMirrorOperation(mirrorName)
+	// TODO workaround to handle output_port casting
+	// - when output_port is empty in ovsdb, it returns an empty ovsdb.OvsSet
+	// - when output_port contains an UUID reference, it returns a ovsdb.UUID
+	// if isUUID = true => output_port is of type ovsdb.UUID, so it contains a UUID reference
+	// otherwise => output_port is an empty ovsdb.OvsSet that cannot be casted to ovsdb.UUID
+	outputPort, isUUID := row["output_port"].(ovsdb.UUID)
+
+	logger.Infof("DeleteMirror - outputPort: %#v", outputPort)
+	logger.Infof("DeleteMirror - selectSrcPorts %#v", selectSrcPorts)
+	logger.Infof("DeleteMirror - selectDstPorts %#v", selectDstPorts)
+
+	if len(selectSrcPorts) == 0 && len(selectDstPorts) == 0 && !isUUID {
+		logger.Infof("DeleteMirror - mirror %s is empty - removing it", mirrorName)
+
+		deleteOp := deleteMirrorOperation(mirrorName)
+		detachFromBridgeOp := detachMirrorFromBridgeOperation(mirrorUUID, bridgeName)
+
+		// Perform OVS transaction
+		operations := []ovsdb.Operation{*deleteOp, *detachFromBridgeOp}
+
+		logger.Infof("DeleteMirror - operations %#v", operations)
+
+		_, err = ovsd.ovsdbTransact(operations)
+		return err
 	}
 
 	return nil
@@ -235,7 +259,7 @@ func (ovsd *OvsBridgeDriver) GetMirrorUUID(mirrorName string) (ovsdb.UUID, error
 	}
 
 	// We make a select transaction using the interface name
-	// Then get the Port UUID from it
+	// Then get the Mirror UUID from it
 	mirrorUUID := row["_uuid"].(ovsdb.UUID)
 
 	return mirrorUUID, nil
@@ -253,172 +277,6 @@ func (ovsd *OvsBridgeDriver) GetPortUUID(portName string) (ovsdb.UUID, error) {
 	portUUID := row["_uuid"].(ovsdb.UUID)
 
 	return portUUID, nil
-}
-
-// DeletePort Delete a port from OVS
-// func (ovsd *OvsBridgeDriver) DeletePort(intfName string) error {
-// 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, intfName)
-// 	row, err := ovsd.findByCondition("Port", condition, nil)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	externalIDs, err := getExternalIDs(row)
-// 	if err != nil {
-// 		return fmt.Errorf("get external ids: %v", err)
-// 	}
-// 	if externalIDs["owner"] != ovsPortOwner {
-// 		return fmt.Errorf("port not created by ovs-cni")
-// 	}
-
-// 	// We make a select transaction using the interface name
-// 	// Then get the Port UUID from it
-// 	portUUID := row["_uuid"].(ovsdb.UUID)
-
-// 	intfOp := deleteInterfaceOperation(intfName)
-
-// 	portOp := deletePortOperation(intfName)
-
-// 	mutateOp := detachPortOperation(portUUID, ovsd.OvsBridgeName)
-
-// 	// Perform OVS transaction
-// 	operations := []ovsdb.Operation{*intfOp, *portOp, *mutateOp}
-
-// 	_, err = ovsd.ovsdbTransact(operations)
-// 	return err
-// }
-
-func getExternalIDs(row map[string]interface{}) (map[string]string, error) {
-	rowVal, ok := row["external_ids"]
-	if !ok {
-		return nil, fmt.Errorf("row does not contain external_ids")
-	}
-
-	rowValOvsMap, ok := rowVal.(ovsdb.OvsMap)
-	if !ok {
-		return nil, fmt.Errorf("not a OvsMap: %T: %v", rowVal, rowVal)
-	}
-
-	extIDs := make(map[string]string, len(rowValOvsMap.GoMap))
-	for key, value := range rowValOvsMap.GoMap {
-		extIDs[key.(string)] = value.(string)
-	}
-	return extIDs, nil
-}
-
-// BridgeList returns available ovs bridge names
-func (ovsd *OvsDriver) BridgeList() ([]string, error) {
-	selectOp := []ovsdb.Operation{{
-		Op:      "select",
-		Table:   "Bridge",
-		Columns: []string{"name"},
-	}}
-
-	transactionResult, err := ovsd.ovsdbTransact(selectOp)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(transactionResult) != 1 {
-		return nil, fmt.Errorf("unknow error")
-	}
-
-	operationResult := transactionResult[0]
-	if operationResult.Error != "" {
-		return nil, fmt.Errorf("%s - %s", operationResult.Error, operationResult.Details)
-	}
-
-	bridges := []string{}
-	for _, bridge := range operationResult.Rows {
-		bridges = append(bridges, fmt.Sprintf("%v", bridge["name"]))
-	}
-
-	return bridges, nil
-}
-
-// GetOFPortOpState retrieves link state of the OF port
-func (ovsd *OvsDriver) GetOFPortOpState(portName string) (string, error) {
-	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, portName)
-	selectOp := []ovsdb.Operation{{
-		Op:      "select",
-		Table:   "Interface",
-		Columns: []string{"link_state"},
-		Where:   []ovsdb.Condition{condition},
-	}}
-
-	transactionResult, err := ovsd.ovsdbTransact(selectOp)
-	if err != nil {
-		return "", err
-	}
-
-	if len(transactionResult) != 1 {
-		return "", fmt.Errorf("unknown error")
-	}
-
-	operationResult := transactionResult[0]
-	if operationResult.Error != "" {
-		return "", fmt.Errorf("%s - %s", operationResult.Error, operationResult.Details)
-	}
-
-	if len(operationResult.Rows) != 1 {
-		return "", nil
-	}
-
-	return fmt.Sprintf("%v", operationResult.Rows[0]["link_state"]), nil
-}
-
-// GetOFPortVlanState retrieves port vlan state of the OF port
-func (ovsd *OvsDriver) GetOFPortVlanState(portName string) (string, *uint, []uint, error) {
-	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, portName)
-	selectOp := []ovsdb.Operation{{
-		Op:      "select",
-		Table:   "Port",
-		Columns: []string{"vlan_mode", "tag", "trunks"},
-		Where:   []ovsdb.Condition{condition},
-	}}
-	var vlanMode = ""
-	var tag *uint = nil
-	var trunks []uint
-
-	transactionResult, err := ovsd.ovsdbTransact(selectOp)
-	if err != nil {
-		return vlanMode, tag, trunks, err
-	}
-
-	if len(transactionResult) != 1 {
-		return vlanMode, tag, trunks, fmt.Errorf("transactionResult length is not one")
-	}
-
-	operationResult := transactionResult[0]
-	if operationResult.Error != "" {
-		return vlanMode, tag, trunks, fmt.Errorf("%s - %s", operationResult.Error, operationResult.Details)
-	}
-
-	if len(operationResult.Rows) != 1 {
-		return vlanMode, tag, trunks, fmt.Errorf("operationResult.Rows length is not one")
-	}
-
-	vlanModeCol := operationResult.Rows[0]["vlan_mode"]
-	switch vlanModeCol.(type) {
-	case string:
-		vlanMode = operationResult.Rows[0]["vlan_mode"].(string)
-	}
-
-	tagCol := operationResult.Rows[0]["tag"]
-	switch tagCol.(type) {
-	case float64:
-		tagValue := uint(operationResult.Rows[0]["tag"].(float64))
-		tag = &tagValue
-	}
-
-	trunksCol := operationResult.Rows[0]["trunks"].(ovsdb.OvsSet).GoSet
-	if len(trunksCol) > 0 {
-		for i := range trunksCol {
-			trunks = append(trunks, uint(trunksCol[i].(float64)))
-		}
-	}
-
-	return vlanMode, tag, trunks, nil
 }
 
 // IsMirrorPresent Check if the Mirror entry already exists
@@ -483,70 +341,6 @@ func (ovsd *OvsDriver) IsBridgePresent(bridgeName string) (bool, error) {
 	}
 
 	return true, nil
-}
-
-// GetOvsPortForContIface Return ovs port name for an container interface
-func (ovsd *OvsDriver) GetOvsPortForContIface(contIface, contNetnsPath string) (string, bool, error) {
-	searchMap := map[string]string{
-		"contNetns": contNetnsPath,
-		"contIface": contIface,
-		"owner":     ovsPortOwner,
-	}
-	ovsmap, err := ovsdb.NewOvsMap(searchMap)
-	if err != nil {
-		return "", false, err
-	}
-
-	condition := ovsdb.NewCondition("external_ids", ovsdb.ConditionEqual, ovsmap)
-	colums := []string{"name", "external_ids"}
-	port, err := ovsd.findByCondition("Port", condition, colums)
-	if err != nil {
-		return "", false, err
-	}
-
-	return fmt.Sprintf("%v", port["name"]), true, nil
-}
-
-// FindInterfacesWithError returns the interfaces which are in error state
-func (ovsd *OvsDriver) FindInterfacesWithError() ([]string, error) {
-	selectOp := ovsdb.Operation{
-		Op:      "select",
-		Columns: []string{"name", "error"},
-		Table:   "Interface",
-	}
-	transactionResult, err := ovsd.ovsdbTransact([]ovsdb.Operation{selectOp})
-	if err != nil {
-		return nil, err
-	}
-	if len(transactionResult) != 1 {
-		return nil, fmt.Errorf("no transaction result")
-	}
-	operationResult := transactionResult[0]
-	if operationResult.Error != "" {
-		return nil, fmt.Errorf(operationResult.Error)
-	}
-
-	var names []string
-	for _, row := range operationResult.Rows {
-		if !hasError(row) {
-			continue
-		}
-		names = append(names, fmt.Sprintf("%v", row["name"]))
-	}
-	if len(names) > 0 {
-		log.Printf("found %d interfaces with error", len(names))
-	}
-	return names, nil
-}
-
-func hasError(row map[string]interface{}) bool {
-	v := row["error"]
-	switch x := v.(type) {
-	case string:
-		return x != ""
-	default:
-		return false
-	}
 }
 
 // ************************ Notification handler for OVS DB changes ****************
@@ -702,39 +496,17 @@ func deleteMirrorOperation(mirrorName string) *ovsdb.Operation {
 	return &mirrorOp
 }
 
-// func deleteInterfaceOperation(intfName string) *ovsdb.Operation {
-// 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, intfName)
-// 	intfOp := ovsdb.Operation{
-// 		Op:    "delete",
-// 		Table: "Interface",
-// 		Where: []ovsdb.Condition{condition},
-// 	}
+func detachMirrorFromBridgeOperation(mirrorUUID ovsdb.UUID, bridgeName string) *ovsdb.Operation {
+	// mutate the Ports column of the row in the Bridge table
+	mutateSet, _ := ovsdb.NewOvsSet(mirrorUUID)
+	mutation := ovsdb.NewMutation("mirrors", ovsdb.MutateOperationDelete, mutateSet)
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, bridgeName)
+	mutateOp := ovsdb.Operation{
+		Op:        "mutate",
+		Table:     "Bridge",
+		Mutations: []ovsdb.Mutation{*mutation},
+		Where:     []ovsdb.Condition{condition},
+	}
 
-// 	return &intfOp
-// }
-
-// func deletePortOperation(intfName string) *ovsdb.Operation {
-// 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, intfName)
-// 	portOp := ovsdb.Operation{
-// 		Op:    "delete",
-// 		Table: "Port",
-// 		Where: []ovsdb.Condition{condition},
-// 	}
-
-// 	return &portOp
-// }
-
-// func detachPortOperation(portUUID ovsdb.UUID, bridgeName string) *ovsdb.Operation {
-// 	// mutate the Ports column of the row in the Bridge table
-// 	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
-// 	mutation := ovsdb.NewMutation("ports", ovsdb.MutateOperationDelete, mutateSet)
-// 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, bridgeName)
-// 	mutateOp := ovsdb.Operation{
-// 		Op:        "mutate",
-// 		Table:     "Bridge",
-// 		Mutations: []ovsdb.Mutation{*mutation},
-// 		Where:     []ovsdb.Condition{condition},
-// 	}
-
-// 	return &mutateOp
-// }
+	return &mutateOp
+}
