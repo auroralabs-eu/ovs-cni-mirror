@@ -12,7 +12,7 @@ spec:
         {
           "type": "ovs",
           "bridge": "br-emu-cni",
-          "vlan": 200
+          "vlan": 1
         },
         {
           "type": "ovs-cni-mirror-producer",
