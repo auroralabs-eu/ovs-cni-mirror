@@ -178,6 +178,25 @@ func (ovsd *OvsBridgeDriver) CreateMirror(bridgeName, mirrorName string) error {
 	return nil
 }
 
+func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
+	logger.Info("DeleteMirror - called")
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	row, err := ovsd.findByCondition("Mirror", condition, nil)
+	if err != nil {
+		return err
+	}
+	logger.Info("DeleteMirror - row: %#v", row)
+
+	selectSrcPorts := row["select_src_port"].(ovsdb.OvsSet).GoSet
+	selectDstPorts := row["select_dst_port"].(ovsdb.OvsSet).GoSet
+
+	if len(selectSrcPorts) == 0 && len(selectDstPorts) == 0 && row["output_port"] = "" {
+		deleteOp := ovsd.deleteMirrorOperation(mirrorName)
+	}
+
+	return nil
+}
+
 func (ovsd *OvsBridgeDriver) AttachPortToMirror(portUUIDStr, mirrorName string, ingress, egress bool) error {
 	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
 
@@ -186,6 +205,19 @@ func (ovsd *OvsBridgeDriver) AttachPortToMirror(portUUIDStr, mirrorName string, 
 	}
 
 	mutateMirrorOp := mutateMirrorOperation(portUUID, mirrorName, ingress, egress)
+
+	logger.Infof("AttachPortToMirror - mutateMirrorOp: %#v", mutateMirrorOp)
+	// Perform OVS transaction
+	operations := []ovsdb.Operation{*mutateMirrorOp}
+
+	_, err := ovsd.ovsdbTransact(operations)
+	return err
+}
+
+func (ovsd *OvsBridgeDriver) DetachPortFromMirror(portUUIDStr, mirrorName string) error {
+	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
+
+	mutateMirrorOp := detachPortFromMirrorOperation(portUUID, mirrorName)
 
 	logger.Infof("AttachPortToMirror - mutateMirrorOp: %#v", mutateMirrorOp)
 	// Perform OVS transaction
@@ -639,6 +671,35 @@ func attachMirrorOperation(mirrorUUID ovsdb.UUID, bridgeName string) *ovsdb.Oper
 	logger.Infof("cmdAdd - attachMirrorOperation mutateOp: %#v", mutateOp)
 
 	return &mutateOp
+}
+
+func detachPortFromMirrorOperation(portUUID ovsdb.UUID, mirrorName string) *ovsdb.Operation {
+	// mutate the Ports column of the row in the Bridge table
+	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
+	// select_src_port = Ports on which arriving packets are selected for mirroring
+	mutationIngress := ovsdb.NewMutation("select_src_port", ovsdb.MutateOperationDelete, mutateSet)
+	// select_dst_port = Ports on which departing packets are selected for mirroring
+	mutationEgress := ovsdb.NewMutation("select_dst_port", ovsdb.MutateOperationDelete, mutateSet)
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	mutateOp := ovsdb.Operation{
+		Op:        "mutate",
+		Table:     "Mirror",
+		Mutations: []ovsdb.Mutation{*mutationIngress, *mutationEgress},
+		Where:     []ovsdb.Condition{condition},
+	}
+
+	return &mutateOp
+}
+
+func deleteMirrorOperation(mirrorName string) *ovsdb.Operation {
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	mirrorOp := ovsdb.Operation{
+		Op:    "delete",
+		Table: "Mirror",
+		Where: []ovsdb.Condition{condition},
+	}
+
+	return &mirrorOp
 }
 
 // func deleteInterfaceOperation(intfName string) *ovsdb.Operation {

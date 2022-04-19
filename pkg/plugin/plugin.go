@@ -111,10 +111,23 @@ func attachPortToMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mi
 
 	err := ovsDriver.AttachPortToMirror(portUUIDStr, mirror.Name, mirror.Ingress, mirror.Egress)
 	if err != nil {
-		logger.Info("attachPortToMirror - AttachPortToMirror ERROR")
+		logger.Infof("attachPortToMirror - AttachPortToMirror for mirror %s returned an ERROR: %v", mirror.Name, err)
 		return err
 	}
 	logger.Infof("attachPortToMirror - AttachPortToMirror - DONE")
+
+	return nil
+}
+
+func detachPortFromMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mirror *types.Mirror) error {
+	logger.Infof("detachPortFromMirror - called")
+
+	err := ovsDriver.DetachPortFromMirror(portUUIDStr, mirror.Name)
+	if err != nil {
+		logger.Infof("detachPortFromMirror - DetachPortFromMirror for mirror %s returned an ERROR: %v", mirror.Name, err)
+		return err
+	}
+	logger.Infof("detachPortFromMirror - DetachPortFromMirror - DONE")
 
 	return nil
 }
@@ -207,12 +220,6 @@ func CmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-	contNetns, err := ns.GetNS(args.Netns)
-	if err != nil {
-		return fmt.Errorf("failed to open netns %q: %v", args.Netns, err)
-	}
-	defer contNetns.Close()
-
 	portUUID, err := getPortUUID(ovsDriver, netconf.PrevResult.Interfaces)
 	if err != nil {
 		return fmt.Errorf("cannot get existing portUuid from db %v", err)
@@ -275,37 +282,93 @@ func CmdAdd(args *skel.CmdArgs) error {
 func CmdDel(args *skel.CmdArgs) error {
 	logCall("DEL", args)
 	logger.Info("--------------CmdDel--------------")
-	// logger.Info(args.IfName)
-	// logger.Info(args.ContainerID)
-	// logger.Info(args.Netns)                                           // format is /var/run/netns/cni-<ID>
-	// logger.Info(args.Args)                                            // "IgnoreUnknown=true;K8S_POD_NAMESPACE=emu-cni;K8S_POD_NAME=ovs-client-9-7b6775d6c9-lw9ck;K8S_POD_INFRA_CONTAINER_ID=<args.ContainerID>;K8S_POD_UID=<POD UID????>"
-	// logger.Info(args.Path)                                            // /opt/cni/bin:/var/lib/rancher/k3s/data/<args.ContainerID>/bin
-	// logger.Info(fmt.Sprintf("the config data: %s\n", args.StdinData)) // value from NAD config
+	logger.Info(args.IfName) // ovstest
+	logger.Info(args.ContainerID)
+	logger.Info(args.Netns)                                           // format is /var/run/netns/cni-<ID>
+	logger.Info(args.Args)                                            // "IgnoreUnknown=true;K8S_POD_NAMESPACE=emu-cni;K8S_POD_NAME=ovs-client-9-7b6775d6c9-lw9ck;K8S_POD_INFRA_CONTAINER_ID=<args.ContainerID>;K8S_POD_UID=<POD UID????>"
+	logger.Info(args.Path)                                            // /opt/cni/bin:/var/lib/rancher/k3s/data/<args.ContainerID>/bin
+	logger.Info(fmt.Sprintf("the config data: %s\n", args.StdinData)) // value from NAD config
+	logger.Info("**********************************")
 
-	//cRef := config.GetCRef(args.ContainerID, args.IfName)
-	//cache, err := config.LoadConfFromCache(cRef)
-	//if err != nil {
-	//	// If cmdDel() fails, cached netconf is cleaned up by
-	//	// the followed defer call. However, subsequence calls
-	//	// of cmdDel() from kubelet fail in a dead loop due to
-	//	// cached netconf doesn't exist.
-	//	// Return nil when loadConfFromCache fails since the rest
-	//	// of cmdDel() code relies on netconf as input argument
-	//	// and there is no meaning to continue.
-	//	return nil
-	//}
-	//
-	//defer func() {
-	//	if err == nil {
-	//		utils.CleanCache(cRef)
-	//	}
-	//}()
-	//
-	//envArgs, err := getEnvArgs(args.Args)
-	//if err != nil {
-	//	return err
-	//}
-	//
+	netconf, err := config.LoadConf(args.StdinData)
+	if err != nil {
+		return err
+	}
+	logger.Infof("cmdDel - netconf parsed from StdinData is: %#v", netconf)
+
+	ovsDriver, err := ovsdb.NewOvsBridgeDriver(netconf.BrName, netconf.SocketFile)
+	if err != nil {
+		return err
+	}
+
+	contNetns, err := ns.GetNS(args.Netns)
+	if err != nil {
+		return fmt.Errorf("failed to open netns %q: %v", args.Netns, err)
+	}
+	defer contNetns.Close()
+
+	portUUID, err := getPortUUID(ovsDriver, netconf.PrevResult.Interfaces)
+	if err != nil {
+		return fmt.Errorf("cannot get existing portUuid from db %v", err)
+	}
+
+	logger.Info("cmdDel - interating all mirrors")
+	for _, mirror := range netconf.Mirrors {
+
+		mirrorExist, err := ovsDriver.IsMirrorPresent(mirror.Name)
+		if err != nil {
+			return err
+		}
+		if !mirrorExist {
+			// skip error because CNI spec states that "Plugins should generally complete a DEL action without error even if some resources are missing"
+			continue
+		}
+
+		if err = detachPortFromMirror(ovsDriver, portUUID, mirror); err != nil {
+			logger.Infof("cmdDel - detachPortFromMirror returned an error for mirror %s", mirror.Name)
+			return fmt.Errorf("cannot detach port %s from mirror %s: %v", portUUID, mirror.Name, err)
+		}
+
+		logger.Infof("cmdDel - calling DeleteMirror %s", mirror.Name)
+		err = ovsDriver.DeleteMirror(netconf.BrName, mirror.Name)
+		if err != nil {
+			logger.Infof("cmdDel - DeleteMirror %s returned an error", mirror.Name)
+			return fmt.Errorf("cannot create mirror %s: %v ", mirror.Name, err)
+		}
+		logger.Infof("cmdDel - DeleteMirror - success %s", mirror.Name)
+	}
+
+	result := &current.Result{
+		Interfaces: netconf.PrevResult.Interfaces,
+	}
+
+	logger.Infof("cmdDel - result: %#v", result)
+	return cnitypes.PrintResult(result, netconf.CNIVersion)
+
+	// cRef := config.GetCRef(args.ContainerID, args.IfName)
+	// cache, err := config.LoadConfFromCache(cRef)
+	// if err != nil {
+	// 	// If cmdDel() fails, cached netconf is cleaned up by
+	// 	// the followed defer call. However, subsequence calls
+	// 	// of cmdDel() from kubelet fail in a dead loop due to
+	// 	// cached netconf doesn't exist.
+	// 	// Return nil when loadConfFromCache fails since the rest
+	// 	// of cmdDel() code relies on netconf as input argument
+	// 	// and there is no meaning to continue.
+	// 	return nil
+	// }
+
+	// defer func() {
+	// 	if err == nil {
+	// 		utils.CleanCache(cRef)
+	// 	}
+	// }()
+
+	// envArgs, err := getEnvArgs(args.Args)
+	// if err != nil {
+	// 	return err
+	// }
+
 	//var ovnPort string
 	//if envArgs != nil {
 	//	ovnPort = string(envArgs.OvnPort)
