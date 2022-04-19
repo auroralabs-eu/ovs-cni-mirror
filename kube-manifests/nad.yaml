@@ -1,0 +1,93 @@
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: nad-al-cni-1
+  namespace: emu-cni
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: nad-al-cni-1
+spec:
+  config: '{
+      "cniVersion": "0.4.0",
+      "plugins": [
+        {
+          "type": "ovs",
+          "bridge": "br-emu-cni",
+          "vlan": 200
+        },
+        {
+          "type": "ovs-cni-mirror-producer",
+          "bridge": "br-emu-cni",
+          "mirrors": [
+            {
+              "name": "mirror1",
+              "ingress": true,
+              "egress": true
+            },
+            {
+              "name": "mirror2",
+              "ingress": true,
+              "egress": false
+            }
+          ]
+        }
+      ]
+    }'
+
+#     Name       string `json:"name"`
+# BridgeName string `json:"bridgeName"`
+# IP         string `json:"ip"`
+# MAC        string `json:"mac"`
+# Peppino    string `json:"peppino"`
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cni-client-1
+  namespace: emu-cni
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cni-client-1
+  template:
+    metadata:
+      annotations:
+        #v1.multus-cni.io/default-network: emu-pcap/ovs-vlan-ovs-bridge-9 # only one iface
+        k8s.v1.cni.cncf.io/networks: | 
+          [
+            {
+              "name":"nad-al-cni-1",
+              "namespace":"emu-cni"
+            }
+          ]
+        # "namespace": "test"
+      labels:
+        app: cni-client-1
+    spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule # don't put on same node
+        labelSelector:
+          matchLabels:
+            app: cni-client-1
+      # nodeSelector:
+      #   kubernetes.io/hostname: alk8s2
+      containers:
+      - name: samplepod
+        command: ["/bin/sh"]
+        args: ["-c", "sleep infinity"]
+        image: alpine
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"] # required for setting IP addr
+        volumeMounts: # needed only to allow the CNI to find the sock.db
+        - name: tun
+          mountPath: /dev/net/tun
+      volumes:
+      - name: tun
+        hostPath:
+          path: /dev/net/tun

@@ -1,0 +1,23 @@
+# built binaries
+cmd/marker/marker
+cmd/plugin/plugin
+
+# Temporary build files
+build/_output
+
+# used in build
+cmd/marker/.version
+cmd/plugin/.version
+
+# local cluster
+_kubevirtci/
+
+# testing
+_out
+
+# temp files
+cluster/multus-daemonset.yml
+
+.idea
+build
+.DS_Store
