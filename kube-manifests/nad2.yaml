@@ -1,10 +1,10 @@
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
 metadata:
-  name: nad-al-cni-1
+  name: nad-al-cni-2
   namespace: emu-cni
   annotations:
-    k8s.v1.cni.cncf.io/resourceName: nad-al-cni-1
+    k8s.v1.cni.cncf.io/resourceName: nad-al-cni-2
 spec:
   config: '{
       "cniVersion": "0.4.0",
@@ -43,7 +43,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cni-client-1
+  name: cni-client-2
   namespace: emu-cni
 spec:
   replicas: 1
@@ -51,7 +51,7 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: cni-client-1
+      app: cni-client-2
   template:
     metadata:
       annotations:
@@ -59,14 +59,14 @@ spec:
         k8s.v1.cni.cncf.io/networks: | 
           [
             {
-              "name":"nad-al-cni-1",
+              "name":"nad-al-cni-2",
               "namespace":"emu-cni",
               "interface":"emu-prod"
             }
           ]
         # "namespace": "test"
       labels:
-        app: cni-client-1
+        app: cni-client-2
     spec:
       topologySpreadConstraints:
       - maxSkew: 1
@@ -74,7 +74,7 @@ spec:
         whenUnsatisfiable: DoNotSchedule # don't put on same node
         labelSelector:
           matchLabels:
-            app: cni-client-1
+            app: cni-client-2
       # nodeSelector:
       #   kubernetes.io/hostname: alk8s2
       containers:
