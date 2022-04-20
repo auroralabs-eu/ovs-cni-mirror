@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"go.uber.org/zap"
 
@@ -177,6 +178,25 @@ func (ovsd *OvsBridgeDriver) CreateMirror(bridgeName, mirrorName string) error {
 	return nil
 }
 
+func convertToArray(elem interface{}) ([]interface{}, error) {
+	logger.Info("convert input: %#v", elem)
+	elemType := reflect.TypeOf(elem)
+	if elemType.Kind() == reflect.Struct {
+		logger.Info("convert Struct with elem name: " + elemType.Name())
+		if elemType.Name() == "UUID" {
+			logger.Info("convert UUID")
+			return []interface{}{elem}, nil
+		} else if elemType.Name() == "OvsSet" {
+			logger.Info("convert OvsSet with elem name: " + elemType.Name())
+			logger.Infof("convert - casting it to OvsSet %#v", elem.(ovsdb.OvsSet))
+			return elem.(ovsdb.OvsSet).GoSet, nil
+		}
+		return nil, errors.New("struct with unknown types")
+	} else {
+		return nil, errors.New("unknown type")
+	}
+}
+
 func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
 	logger.Info("DeleteMirror - called")
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
@@ -189,21 +209,28 @@ func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
 	mirrorUUID := row["_uuid"].(ovsdb.UUID)
 	logger.Infof("DeleteMirror - mirrorUUID %#v", mirrorUUID)
 
-	selectSrcPorts := row["select_src_port"].(ovsdb.OvsSet).GoSet
-	selectDstPorts := row["select_dst_port"].(ovsdb.OvsSet).GoSet
+	// Workaround to handle output_port casting
+	// - when row["column"] is empty in ovsdb, it returns an empty ovsdb.OvsSet
+	// - when row["column"] contains an UUID reference, it returns a ovsdb.UUID
+	// - when row["column"] contains multiple UUID references, it returns the elements
+	selectSrcPorts, err := convertToArray(row["select_src_port"])
+	if err != nil {
+		return fmt.Errorf("cannot convert select_src_port to an array error: %v", err)
+	}
+	selectDstPorts, err := convertToArray(row["select_dst_port"])
+	if err != nil {
+		return fmt.Errorf("cannot convert select_dst_port to an array error: %v", err)
+	}
+	outputPorts, err := convertToArray(row["output_port"])
+	if err != nil {
+		return fmt.Errorf("cannot convert output_port to an array error: %v", err)
+	}
 
-	// TODO workaround to handle output_port casting
-	// - when output_port is empty in ovsdb, it returns an empty ovsdb.OvsSet
-	// - when output_port contains an UUID reference, it returns a ovsdb.UUID
-	// if isUUID = true => output_port is of type ovsdb.UUID, so it contains a UUID reference
-	// otherwise => output_port is an empty ovsdb.OvsSet that cannot be casted to ovsdb.UUID
-	outputPort, isUUID := row["output_port"].(ovsdb.UUID)
-
-	logger.Infof("DeleteMirror - outputPort: %#v", outputPort)
 	logger.Infof("DeleteMirror - selectSrcPorts %#v", selectSrcPorts)
 	logger.Infof("DeleteMirror - selectDstPorts %#v", selectDstPorts)
+	logger.Infof("DeleteMirror - outputPorts: %#v", outputPorts)
 
-	if len(selectSrcPorts) == 0 && len(selectDstPorts) == 0 && !isUUID {
+	if len(selectSrcPorts) == 0 && len(selectDstPorts) == 0 && len(outputPorts) == 0 {
 		logger.Infof("DeleteMirror - mirror %s is empty - removing it", mirrorName)
 
 		deleteOp := deleteMirrorOperation(mirrorName)
