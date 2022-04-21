@@ -157,7 +157,7 @@ func CmdAdd(args *skel.CmdArgs) error {
 func CmdDel(args *skel.CmdArgs) error {
 	logCall("DEL", args)
 	logger.Info("--------------CmdDel--------------")
-	logger.Info(args.IfName) // ovstest
+	logger.Info(args.IfName)
 	logger.Info(args.ContainerID)
 	logger.Info(args.Netns)
 	logger.Info(args.Args)
@@ -220,11 +220,43 @@ func CmdCheck(args *skel.CmdArgs) error {
 	logCall("CHECK", args)
 
 	logger.Info("--------------cmdCheck--------------")
-	// logger.Info(args.IfName)
-	// logger.Info(args.ContainerID)
-	// logger.Info(args.Netns)
-	// logger.Info(args.Args)
-	// logger.Info(args.Path)
-	// logger.Info(fmt.Sprintf("cmdCheck - the config data: %s\n", args.StdinData))
+	logger.Info(args.IfName)
+	logger.Info(args.ContainerID)
+	logger.Info(args.Netns)
+	logger.Info(args.Args)
+	logger.Info(args.Path)
+	logger.Info(fmt.Sprintf("the config data: %s\n", args.StdinData))
+	logger.Info("**********************************")
+
+	netconf, err := config.LoadConf(args.StdinData)
+	if err != nil {
+		return err
+	}
+	logger.Infof("cmdCheck - netconf parsed from StdinData is: %#v", netconf)
+
+	ovsDriver, err := ovsdb.NewOvsBridgeDriver(netconf.BrName, netconf.SocketFile)
+	if err != nil {
+		return err
+	}
+
+	portUUID, err := getPortUUID(ovsDriver, netconf.PrevResult.Interfaces)
+	if err != nil {
+		return fmt.Errorf("cannot get existing portUuid from db %v", err)
+	}
+
+	logger.Info("cmdCheck - interating all mirrors")
+	for _, mirror := range netconf.Mirrors {
+
+		logger.Infof("cmdCheck - Check mirror %s with ports", mirror.Name)
+		mirrorExist, err := ovsDriver.CheckMirrorWithPorts(mirror.Name, mirror.Egress, mirror.Ingress, portUUID)
+		if err != nil {
+			return err
+		}
+
+		if !mirrorExist {
+			return fmt.Errorf("mirror %s not present", mirror.Name)
+		}
+	}
+
 	return nil
 }

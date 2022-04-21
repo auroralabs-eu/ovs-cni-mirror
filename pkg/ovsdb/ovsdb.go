@@ -306,6 +306,52 @@ func (ovsd *OvsBridgeDriver) GetPortUUID(portName string) (ovsdb.UUID, error) {
 	return portUUID, nil
 }
 
+func (ovsd *OvsDriver) CheckMirrorWithPorts(mirrorName string, ingress, egress bool, portUUIDStr string) (bool, error) {
+	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
+
+	var conditions []ovsdb.Condition = []ovsdb.Condition{}
+	conditionName := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	conditions = append(conditions, conditionName)
+	if ingress {
+		// select_src_port = Ports on which arriving packets are selected for mirroring
+		conditionIngress := ovsdb.NewCondition("select_src_port", ovsdb.ConditionIncludes, portUUID)
+		conditions = append(conditions, conditionIngress)
+	}
+	if egress {
+		// select_dst_port = Ports on which departing packets are selected for mirroring
+		conditionsEgress := ovsdb.NewCondition("select_dst_port", ovsdb.ConditionIncludes, portUUID)
+		conditions = append(conditions, conditionsEgress)
+	}
+	selectOp := []ovsdb.Operation{{
+		Op:      "select",
+		Table:   "Mirror",
+		Where:   conditions,
+		Columns: []string{"name"},
+	}}
+
+	transactionResult, err := ovsd.ovsdbTransact(selectOp)
+	if err != nil {
+		return false, err
+	}
+
+	if len(transactionResult) != 1 {
+		// there is no need to return an error, because we want to create
+		// a new mirror if not exists
+		return false, nil
+	}
+
+	operationResult := transactionResult[0]
+	if operationResult.Error != "" {
+		return false, fmt.Errorf("%s - %s", operationResult.Error, operationResult.Details)
+	}
+
+	if len(operationResult.Rows) != 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 // IsMirrorPresent Check if the Mirror entry already exists
 func (ovsd *OvsDriver) IsMirrorPresent(mirrorName string) (bool, error) {
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
