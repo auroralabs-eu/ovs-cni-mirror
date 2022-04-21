@@ -27,8 +27,8 @@ type NetConf struct {
 
 	// support chaining for master interface and IP decisions
 	// occurring prior to running ipvlan plugin
-	// TODO types.NetConf already define this field, so We should use it instead of re-define it
-	PrevResult *current.Result `json:"prevResult"`
+	RawPrevResult *map[string]interface{} `json:"prevResult"`
+	PrevResult    *current.Result         `json:"-"`
 
 	BrName            string    `json:"bridge,omitempty"`
 	ConfigurationPath string    `json:"configuration_path"`

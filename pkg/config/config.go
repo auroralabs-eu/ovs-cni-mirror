@@ -22,6 +22,8 @@ import (
 	"io/ioutil"
 	"os"
 
+	current "github.com/containernetworking/cni/pkg/types/100"
+	"github.com/containernetworking/cni/pkg/version"
 	"github.com/imdario/mergo"
 	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/types"
 )
@@ -47,6 +49,23 @@ func loadNetConf(bytes []byte) (*types.NetConf, error) {
 	netconf := &types.NetConf{}
 	if err := json.Unmarshal(bytes, netconf); err != nil {
 		return nil, fmt.Errorf("failed to load netconf: %v", err)
+	}
+
+	// Parse previous result
+	if netconf.RawPrevResult != nil {
+		resultBytes, err := json.Marshal(netconf.RawPrevResult)
+		if err != nil {
+			return nil, fmt.Errorf("loadNetConf: could not serialize prevResult: %v", err)
+		}
+		res, err := version.NewResult(netconf.CNIVersion, resultBytes)
+		if err != nil {
+			return nil, fmt.Errorf("loadNetConf: could not parse prevResult: %v", err)
+		}
+		netconf.RawPrevResult = nil
+		netconf.PrevResult, err = current.NewResultFromResult(res)
+		if err != nil {
+			return nil, fmt.Errorf("loadNetConf: could not convert result to current version: %v", err)
+		}
 	}
 
 	return netconf, nil
