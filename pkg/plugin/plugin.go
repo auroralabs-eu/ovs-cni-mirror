@@ -153,6 +153,29 @@ func CmdAdd(args *skel.CmdArgs) error {
 	return cnitypes.PrintResult(result, netconf.CNIVersion)
 }
 
+// cleanPorts removes all ports whose interfaces have an error.
+func cleanPorts(ovsDriver *ovsdb.OvsBridgeDriver) error {
+	logger.Info("cleanPorts called")
+	ifaces, err := ovsDriver.FindInterfacesWithError()
+	logger.Infof("cleanPorts - ifaces %#v", ifaces)
+	if err != nil {
+		logger.Infof("cleanPorts - FindInterfacesWithError returned error %#v", err)
+		return fmt.Errorf("clean ports: %v", err)
+	}
+	for _, iface := range ifaces {
+		logger.Infof("cleanPorts - iterating over iface %#v", iface)
+		log.Printf("Info: interface %s has error: removing corresponding port", iface)
+		if err := ovsDriver.DeletePort(iface); err != nil {
+			logger.Infof("cleanPorts - DeletePort returned error %#v", err)
+			// Don't return an error here, just log its occurrence.
+			// Something else may have removed the port already.
+			log.Printf("Error: %v\n", err)
+		}
+	}
+	logger.Info("cleanPorts - completed")
+	return nil
+}
+
 // CmdDel remove handler for deleting container from network
 func CmdDel(args *skel.CmdArgs) error {
 	logCall("DEL", args)
@@ -205,6 +228,11 @@ func CmdDel(args *skel.CmdArgs) error {
 			return fmt.Errorf("cannot create mirror %s: %v ", mirror.Name, err)
 		}
 		logger.Infof("cmdDel - DeleteMirror - success %s", mirror.Name)
+	}
+
+	logger.Info("cmdDel - calling cleanPorts")
+	if err := cleanPorts(ovsDriver); err != nil {
+		return err
 	}
 
 	result := &current.Result{

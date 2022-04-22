@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 
 	"go.uber.org/zap"
@@ -151,6 +152,59 @@ func (ovsd *OvsDriver) ovsdbTransact(ops []ovsdb.Operation) ([]ovsdb.OperationRe
 }
 
 // **************** OVS driver API ********************
+
+// DeletePort Delete a port from OVS
+func (ovsd *OvsBridgeDriver) DeletePort(intfName string) error {
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, intfName)
+	row, err := ovsd.findByCondition("Port", condition, nil)
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("cleanPorts - DeletePort - port found, row = %#v", row)
+
+	externalIDs, err := getExternalIDs(row)
+	if err != nil {
+		return fmt.Errorf("get external ids: %v", err)
+	}
+	if externalIDs["owner"] != ovsPortOwner {
+		return fmt.Errorf("port not created by ovs-cni")
+	}
+
+	// We make a select transaction using the interface name
+	// Then get the Port UUID from it
+	portUUID := row["_uuid"].(ovsdb.UUID)
+
+	intfOp := deleteInterfaceOperation(intfName)
+
+	portOp := deletePortOperation(intfName)
+
+	mutateOp := detachPortOperation(portUUID, ovsd.OvsBridgeName)
+
+	// Perform OVS transaction
+	operations := []ovsdb.Operation{*intfOp, *portOp, *mutateOp}
+
+	_, err = ovsd.ovsdbTransact(operations)
+	return err
+}
+
+func getExternalIDs(row map[string]interface{}) (map[string]string, error) {
+	rowVal, ok := row["external_ids"]
+	if !ok {
+		return nil, fmt.Errorf("row does not contain external_ids")
+	}
+
+	rowValOvsMap, ok := rowVal.(ovsdb.OvsMap)
+	if !ok {
+		return nil, fmt.Errorf("not a OvsMap: %T: %v", rowVal, rowVal)
+	}
+
+	extIDs := make(map[string]string, len(rowValOvsMap.GoMap))
+	for key, value := range rowValOvsMap.GoMap {
+		extIDs[key.(string)] = value.(string)
+	}
+	return extIDs, nil
+}
 
 func (ovsd *OvsBridgeDriver) CreateMirror(bridgeName, mirrorName string) error {
 	mirrorExist, err := ovsd.IsMirrorPresent(mirrorName)
@@ -416,6 +470,54 @@ func (ovsd *OvsDriver) IsBridgePresent(bridgeName string) (bool, error) {
 	return true, nil
 }
 
+// FindInterfacesWithError returns the interfaces which are in error state
+func (ovsd *OvsDriver) FindInterfacesWithError() ([]string, error) {
+	selectOp := ovsdb.Operation{
+		Op:      "select",
+		Columns: []string{"name", "error"},
+		Table:   "Interface",
+	}
+	transactionResult, err := ovsd.ovsdbTransact([]ovsdb.Operation{selectOp})
+	if err != nil {
+		return nil, err
+	}
+	if len(transactionResult) != 1 {
+		return nil, fmt.Errorf("no transaction result")
+	}
+	operationResult := transactionResult[0]
+	if operationResult.Error != "" {
+		return nil, fmt.Errorf(operationResult.Error)
+	}
+
+	logger.Infof("FindInterfacesWithError - operationResult %#v", operationResult)
+
+	var names []string
+	for _, row := range operationResult.Rows {
+		logger.Infof("FindInterfacesWithError - interating row: %#v", row)
+
+		if !hasError(row) {
+			continue
+		}
+		logger.Info("FindInterfacesWithError - error found")
+		names = append(names, fmt.Sprintf("%v", row["name"]))
+	}
+	if len(names) > 0 {
+		log.Printf("found %d interfaces with error", len(names))
+	}
+	logger.Infof("FindInterfacesWithError - errors names: %#v", names)
+	return names, nil
+}
+
+func hasError(row map[string]interface{}) bool {
+	v := row["error"]
+	switch x := v.(type) {
+	case string:
+		return x != ""
+	default:
+		return false
+	}
+}
+
 // ************************ Notification handler for OVS DB changes ****************
 
 // Update yet to be implemented
@@ -573,6 +675,43 @@ func detachMirrorFromBridgeOperation(mirrorUUID ovsdb.UUID, bridgeName string) *
 	// mutate the Ports column of the row in the Bridge table
 	mutateSet, _ := ovsdb.NewOvsSet(mirrorUUID)
 	mutation := ovsdb.NewMutation("mirrors", ovsdb.MutateOperationDelete, mutateSet)
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, bridgeName)
+	mutateOp := ovsdb.Operation{
+		Op:        "mutate",
+		Table:     "Bridge",
+		Mutations: []ovsdb.Mutation{*mutation},
+		Where:     []ovsdb.Condition{condition},
+	}
+
+	return &mutateOp
+}
+
+func deleteInterfaceOperation(intfName string) *ovsdb.Operation {
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, intfName)
+	intfOp := ovsdb.Operation{
+		Op:    "delete",
+		Table: "Interface",
+		Where: []ovsdb.Condition{condition},
+	}
+
+	return &intfOp
+}
+
+func deletePortOperation(intfName string) *ovsdb.Operation {
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, intfName)
+	portOp := ovsdb.Operation{
+		Op:    "delete",
+		Table: "Port",
+		Where: []ovsdb.Condition{condition},
+	}
+
+	return &portOp
+}
+
+func detachPortOperation(portUUID ovsdb.UUID, bridgeName string) *ovsdb.Operation {
+	// mutate the Ports column of the row in the Bridge table
+	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
+	mutation := ovsdb.NewMutation("ports", ovsdb.MutateOperationDelete, mutateSet)
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, bridgeName)
 	mutateOp := ovsdb.Operation{
 		Op:        "mutate",
