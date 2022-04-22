@@ -7,7 +7,7 @@
 
 # copy to the server `cp plugin /opt/cni/bin/ovs-cni-mirror-producer`
 
-FROM golang:1.16
+FROM golang:1.17
 
 WORKDIR /app
 
