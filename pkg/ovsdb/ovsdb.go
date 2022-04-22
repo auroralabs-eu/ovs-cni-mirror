@@ -255,11 +255,11 @@ func (ovsd *OvsBridgeDriver) AttachPortToMirror(portUUIDStr, mirrorName string, 
 		return errors.New("a mirror must have either a ingress or an egress or both")
 	}
 
-	mutateMirrorOp := mutateMirrorOperation(portUUID, mirrorName, ingress, egress)
+	attachPortMirrorOp := attachPortToMirrorOperation(portUUID, mirrorName, ingress, egress)
 
-	logger.Infof("AttachPortToMirror - mutateMirrorOp: %#v", mutateMirrorOp)
+	logger.Infof("AttachPortToMirror - attachPortMirrorOp: %#v", attachPortMirrorOp)
 	// Perform OVS transaction
-	operations := []ovsdb.Operation{*mutateMirrorOp}
+	operations := []ovsdb.Operation{*attachPortMirrorOp}
 
 	_, err := ovsd.ovsdbTransact(operations)
 	return err
@@ -497,7 +497,7 @@ func createMirrorOperation(mirrorName string) (ovsdb.UUID, *ovsdb.Operation) {
 	return mirrorUUID, &mirrorOp
 }
 
-func mutateMirrorOperation(portUUID ovsdb.UUID, mirrorName string, ingress, egress bool) *ovsdb.Operation {
+func attachPortToMirrorOperation(portUUID ovsdb.UUID, mirrorName string, ingress, egress bool) *ovsdb.Operation {
 	// mutate the Ingress and Egress columns of the row in the Mirror table
 	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
 	var mutations []ovsdb.Mutation = []ovsdb.Mutation{}
@@ -519,7 +519,7 @@ func mutateMirrorOperation(portUUID ovsdb.UUID, mirrorName string, ingress, egre
 		Mutations: mutations,
 		Where:     []ovsdb.Condition{condition},
 	}
-	logger.Infof("cmdAdd - CreateMirrorPort() - mutateMirrorOperation mutateOp: %#v", mutateOp)
+	logger.Infof("cmdAdd - CreateMirrorPort() - attachPortToMirrorOperation mutateOp: %#v", mutateOp)
 
 	return &mutateOp
 }
