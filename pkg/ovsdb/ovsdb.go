@@ -442,10 +442,35 @@ func (ovsd *OvsDriver) CheckMirrorConsumerWithPorts(mirrorName string, portUUIDS
 // IsMirrorPresent Check if the Mirror entry already exists
 func (ovsd *OvsDriver) IsMirrorPresent(mirrorName string) (bool, error) {
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
-	_, err := ovsd.findByCondition("Mirror", condition, []string{"name"})
+	// _, err := ovsd.findByCondition("Mirror", condition, []string{"name"})
+	// if err != nil {
+	// 	return false, err
+	// }
+	selectOp := []ovsdb.Operation{{
+		Op:      "select",
+		Table:   "Mirror",
+		Where:   []ovsdb.Condition{condition},
+		Columns: []string{"name"},
+	}}
+
+	transactionResult, err := ovsd.ovsdbTransact(selectOp)
 	if err != nil {
 		return false, err
 	}
+
+	if len(transactionResult) != 1 {
+		return false, fmt.Errorf("unknow error")
+	}
+
+	operationResult := transactionResult[0]
+	if operationResult.Error != "" {
+		return false, fmt.Errorf("%s - %s", operationResult.Error, operationResult.Details)
+	}
+
+	if len(operationResult.Rows) != 1 {
+		return false, nil
+	}
+
 	return true, nil
 }
 
