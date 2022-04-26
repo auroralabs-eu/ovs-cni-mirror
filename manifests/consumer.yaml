@@ -46,7 +46,6 @@ spec:
   template:
     metadata:
       annotations:
-        #v1.multus-cni.io/default-network: emu-pcap/ovs-vlan-ovs-bridge-9 # only one iface
         k8s.v1.cni.cncf.io/networks: | 
           [
             {
@@ -55,31 +54,11 @@ spec:
               "interface":"emu-cons"
             }
           ]
-        # "namespace": "test"
       labels:
         app: cni-cons-1
     spec:
-      topologySpreadConstraints:
-      - maxSkew: 1
-        topologyKey: kubernetes.io/hostname
-        whenUnsatisfiable: DoNotSchedule # don't put on same node
-        labelSelector:
-          matchLabels:
-            app: cni-cons-1
-      # nodeSelector:
-      #   kubernetes.io/hostname: alk8s2
       containers:
       - name: samplepod
         command: ["/bin/sh"]
         args: ["-c", "sleep infinity"]
         image: alpine
-        securityContext:
-          capabilities:
-            add: ["NET_ADMIN"] # required for setting IP addr
-        volumeMounts: # needed only to allow the CNI to find the sock.db
-        - name: tun
-          mountPath: /dev/net/tun
-      volumes:
-      - name: tun
-        hostPath:
-          path: /dev/net/tun

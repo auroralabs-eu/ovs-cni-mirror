@@ -33,7 +33,7 @@ type NetConf struct {
 	BrName            string    `json:"bridge,omitempty"`
 	ConfigurationPath string    `json:"configuration_path"`
 	SocketFile        string    `json:"socket_file"`
-	Mirrors           []*Mirror `json:"mirrors,omitempty"`
+	Mirrors           []*Mirror `json:"mirrors"`
 }
 
 type Mirror struct {
