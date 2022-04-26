@@ -22,8 +22,6 @@ import (
 	"log"
 	"reflect"
 
-	"go.uber.org/zap"
-
 	"github.com/ovn-org/libovsdb/client"
 	"github.com/ovn-org/libovsdb/model"
 	"github.com/ovn-org/libovsdb/ovsdb"
@@ -34,8 +32,6 @@ const (
 	bridgeTable = "Bridge"
 	ovsTable    = "Open_vSwitch"
 )
-
-var logger *zap.SugaredLogger
 
 // Bridge defines an object in Bridge table
 type Bridge struct {
@@ -65,11 +61,6 @@ const (
 	MirrorProducer = iota
 	MirrorConsumer
 )
-
-func init() {
-	logger = InitLogger("/home/master/ovs-logs/ovsdb.log")
-	defer logger.Sync()
-}
 
 // connectToOvsDb connect to ovsdb
 func connectToOvsDb(ovsSocket string) (client.Client, error) {
@@ -229,13 +220,11 @@ func (ovsd *OvsBridgeDriver) CreateMirror(bridgeName, mirrorName string) error {
 }
 
 func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
-	logger.Info("DeleteMirror - called")
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
 	row, err := ovsd.findByCondition("Mirror", condition, nil)
 	if err != nil {
 		return err
 	}
-	logger.Infof("DeleteMirror - row: %#v", row)
 
 	mirrorUUID := row["_uuid"].(ovsdb.UUID)
 
@@ -258,20 +247,12 @@ func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
 		return fmt.Errorf("cannot convert output_port to an array error: %v", err)
 	}
 
-	logger.Infof("DeleteMirror - selectSrcPorts %#v", selectSrcPorts)
-	logger.Infof("DeleteMirror - selectDstPorts %#v", selectDstPorts)
-	logger.Infof("DeleteMirror - outputPorts: %#v", outputPorts)
-
 	if len(selectSrcPorts) == 0 && len(selectDstPorts) == 0 && len(outputPorts) == 0 {
-		logger.Infof("DeleteMirror - mirror %s is empty - removing it", mirrorName)
-
 		deleteOp := deleteMirrorOperation(mirrorName)
 		detachFromBridgeOp := detachMirrorFromBridgeOperation(mirrorUUID, bridgeName)
 
 		// Perform OVS transaction
 		operations := []ovsdb.Operation{*deleteOp, *detachFromBridgeOp}
-
-		logger.Infof("DeleteMirror - operations %#v", operations)
 
 		_, err = ovsd.ovsdbTransact(operations)
 		return err
