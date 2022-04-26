@@ -1,11 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # how to build
-# docker build --rm -f Dockerfile -t ovs-cni-mirror-producer .
-# docker run --rm -it --name ovs-cni-mirror-producer -v $PWD/build:/out ovs-cni-mirror-producer
-# kill the process and check ./build folder with the resulting marker and plugin binary files
-
-# copy to the server `cp plugin /opt/cni/bin/ovs-cni-mirror-producer`
+# docker build --rm -f Dockerfile -t ovs-cni-mirror .
+# docker run --rm -it --name ovs-cni-mirror -v $PWD/build:/out ovs-cni-mirror
+# scp -i ~/<server-key-path> ./build/* <user>@<server-ip>:<remote-server-path>
 
 FROM golang:1.17
 
