@@ -61,6 +61,11 @@ type OvsBridgeDriver struct {
 	OvsBridgeName string
 }
 
+const (
+	MirrorProducer = iota
+	MirrorConsumer
+)
+
 func init() {
 	logger = InitLogger("/home/master/ovs-logs/ovsdb.log")
 	defer logger.Sync()
@@ -209,39 +214,18 @@ func (ovsd *OvsBridgeDriver) CreateMirror(bridgeName, mirrorName string) error {
 		return err
 	}
 
-	logger.Infof("CreateMirror - mirrorExist %t", mirrorExist)
-
 	if !mirrorExist {
 		mirrorUUID, mirrorOp := createMirrorOperation(mirrorName)
-
-		logger.Infof("CreateMirror - mirrorUUID %#v", mirrorUUID)
 
 		attachMirrorOp := attachMirrorOperation(mirrorUUID, bridgeName)
 
 		// Perform OVS transaction
 		operations := []ovsdb.Operation{*mirrorOp, *attachMirrorOp}
 
-		logger.Infof("CreateMirror - operations %#v", operations)
-
 		_, err = ovsd.ovsdbTransact(operations)
 		return err
 	}
 	return nil
-}
-
-// utility function to convert an element (UUID or OvsSet) to an array of UUIDs
-func convertToArray(elem interface{}) ([]interface{}, error) {
-	elemType := reflect.TypeOf(elem)
-	if elemType.Kind() == reflect.Struct {
-		if elemType.Name() == "UUID" {
-			return []interface{}{elem}, nil
-		} else if elemType.Name() == "OvsSet" {
-			return elem.(ovsdb.OvsSet).GoSet, nil
-		}
-		return nil, errors.New("struct with unknown types")
-	} else {
-		return nil, errors.New("unknown type")
-	}
 }
 
 func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
@@ -327,7 +311,7 @@ func (ovsd *OvsBridgeDriver) AttachPortToMirrorConsumer(portUUIDStr, mirrorName 
 func (ovsd *OvsBridgeDriver) DetachPortFromMirrorProducer(portUUIDStr, mirrorName string) error {
 	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
 
-	mutateMirrorOp := detachPortFromMirrorProducerOperation(portUUID, mirrorName)
+	mutateMirrorOp := detachPortFromMirrorOperation(portUUID, mirrorName, MirrorProducer)
 
 	// Perform OVS transaction
 	operations := []ovsdb.Operation{*mutateMirrorOp}
@@ -339,7 +323,7 @@ func (ovsd *OvsBridgeDriver) DetachPortFromMirrorProducer(portUUIDStr, mirrorNam
 func (ovsd *OvsBridgeDriver) DetachPortFromMirrorConsumer(portUUIDStr, mirrorName string) error {
 	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
 
-	mutateMirrorOp := detachPortFromMirrorConsumerOperation(portUUID, mirrorName)
+	mutateMirrorOp := detachPortFromMirrorOperation(portUUID, mirrorName, MirrorConsumer)
 
 	// Perform OVS transaction
 	operations := []ovsdb.Operation{*mutateMirrorOp}
@@ -410,6 +394,7 @@ func (ovsd *OvsDriver) CheckMirrorProducerWithPorts(mirrorName string, ingress, 
 		conditionsEgress := ovsdb.NewCondition("select_dst_port", ovsdb.ConditionIncludes, portUUID)
 		conditions = append(conditions, conditionsEgress)
 	}
+	// We cannot call findByCondition because we need to pass an array of conditions
 	selectOp := []ovsdb.Operation{{
 		Op:      "select",
 		Table:   "Mirror",
@@ -457,33 +442,10 @@ func (ovsd *OvsDriver) CheckMirrorConsumerWithPorts(mirrorName string, portUUIDS
 // IsMirrorPresent Check if the Mirror entry already exists
 func (ovsd *OvsDriver) IsMirrorPresent(mirrorName string) (bool, error) {
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
-	selectOp := []ovsdb.Operation{{
-		Op:      "select",
-		Table:   "Mirror",
-		Where:   []ovsdb.Condition{condition},
-		Columns: []string{"name"},
-	}}
-
-	transactionResult, err := ovsd.ovsdbTransact(selectOp)
+	_, err := ovsd.findByCondition("Mirror", condition, []string{"name"})
 	if err != nil {
 		return false, err
 	}
-
-	if len(transactionResult) != 1 {
-		// there is no need to return an error, because we want to create
-		// a new mirror if not exists
-		return false, nil
-	}
-
-	operationResult := transactionResult[0]
-	if operationResult.Error != "" {
-		return false, fmt.Errorf("%s - %s", operationResult.Error, operationResult.Details)
-	}
-
-	if len(operationResult.Rows) != 1 {
-		return false, nil
-	}
-
 	return true, nil
 }
 
@@ -691,33 +653,30 @@ func attachMirrorOperation(mirrorUUID ovsdb.UUID, bridgeName string) *ovsdb.Oper
 	return &mutateOp
 }
 
-func detachPortFromMirrorProducerOperation(portUUID ovsdb.UUID, mirrorName string) *ovsdb.Operation {
+func detachPortFromMirrorOperation(portUUID ovsdb.UUID, mirrorName string, mirrorType int) *ovsdb.Operation {
 	// mutate the Ports column of the row in the Bridge table
-	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
-	// select_src_port = Ports on which arriving packets are selected for mirroring
-	mutationIngress := ovsdb.NewMutation("select_src_port", ovsdb.MutateOperationDelete, mutateSet)
-	// select_dst_port = Ports on which departing packets are selected for mirroring
-	mutationEgress := ovsdb.NewMutation("select_dst_port", ovsdb.MutateOperationDelete, mutateSet)
-	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
-	mutateOp := ovsdb.Operation{
-		Op:        "mutate",
-		Table:     "Mirror",
-		Mutations: []ovsdb.Mutation{*mutationIngress, *mutationEgress},
-		Where:     []ovsdb.Condition{condition},
+	var mutations []ovsdb.Mutation = []ovsdb.Mutation{}
+	switch mirrorType {
+	case MirrorProducer:
+		mutateSet, _ := ovsdb.NewOvsSet(portUUID)
+		// select_src_port = Ports on which arriving packets are selected for mirroring
+		mutationIngress := ovsdb.NewMutation("select_src_port", ovsdb.MutateOperationDelete, mutateSet)
+		// select_dst_port = Ports on which departing packets are selected for mirroring
+		mutationEgress := ovsdb.NewMutation("select_dst_port", ovsdb.MutateOperationDelete, mutateSet)
+		mutations = append(mutations, *mutationIngress, *mutationEgress)
+	case MirrorConsumer:
+		// output_port = Output port for selected packets
+		mutationOutput := ovsdb.NewMutation("output_port", ovsdb.MutateOperationDelete, portUUID)
+		mutations = append(mutations, *mutationOutput)
+	default:
+		log.Printf("skipping detatch mirror operation because mirrorType is unknown for mirror %s", mirrorName)
 	}
 
-	return &mutateOp
-}
-
-func detachPortFromMirrorConsumerOperation(portUUID ovsdb.UUID, mirrorName string) *ovsdb.Operation {
-	// mutate the Ports column of the row in the Bridge table
-	// output_port = Output port for selected packets
-	mutation := ovsdb.NewMutation("output_port", ovsdb.MutateOperationDelete, portUUID)
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
 	mutateOp := ovsdb.Operation{
 		Op:        "mutate",
 		Table:     "Mirror",
-		Mutations: []ovsdb.Mutation{*mutation},
+		Mutations: mutations,
 		Where:     []ovsdb.Condition{condition},
 	}
 
@@ -785,4 +744,19 @@ func detachPortOperation(portUUID ovsdb.UUID, bridgeName string) *ovsdb.Operatio
 	}
 
 	return &mutateOp
+}
+
+// utility function to convert an element (UUID or OvsSet) to an array of UUIDs
+func convertToArray(elem interface{}) ([]interface{}, error) {
+	elemType := reflect.TypeOf(elem)
+	if elemType.Kind() == reflect.Struct {
+		if elemType.Name() == "UUID" {
+			return []interface{}{elem}, nil
+		} else if elemType.Name() == "OvsSet" {
+			return elem.(ovsdb.OvsSet).GoSet, nil
+		}
+		return nil, errors.New("struct with unknown types")
+	} else {
+		return nil, errors.New("unknown type")
+	}
 }
