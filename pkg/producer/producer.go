@@ -56,18 +56,10 @@ func logCall(command string, args *skel.CmdArgs) {
 }
 
 func getPortUUID(ovsDriver *ovsdb.OvsBridgeDriver, interfaces []*current.Interface) (string, error) {
-	logger.Infof("cmdAdd - getPort() - ovsDriver: %#v", ovsDriver)
-	logger.Infof("cmdAdd - getPort() - interfaces: %#v", interfaces)
-
 	for _, iface := range interfaces {
 		uuid, err := ovsDriver.GetPortUUID(iface.Name)
-		logger.Infof("cmdAdd - getPortUUID() - iterating on interface: %#v", iface)
-		logger.Infof("cmdAdd - getPortUUID() - iterating - uuid: %#v", uuid)
-		logger.Infof("cmdAdd - getPortUUID() - iterating - err: %#v", err)
 		if err == nil {
 			return uuid.GoUUID, nil
-		} else {
-			logger.Infof("cmdAdd - getPortUUID() - port with name %s not found in db", iface.Name)
 		}
 	}
 
@@ -75,27 +67,19 @@ func getPortUUID(ovsDriver *ovsdb.OvsBridgeDriver, interfaces []*current.Interfa
 }
 
 func attachPortToMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mirror *types.Mirror) error {
-	logger.Infof("attachPortToMirror - called")
-
 	err := ovsDriver.AttachPortToMirrorProducer(portUUIDStr, mirror.Name, mirror.Ingress, mirror.Egress)
 	if err != nil {
-		logger.Infof("attachPortToMirror - AttachPortToMirror for mirror %s returned an ERROR: %v", mirror.Name, err)
 		return err
 	}
-	logger.Infof("attachPortToMirror - AttachPortToMirror - DONE")
 
 	return nil
 }
 
 func detachPortFromMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mirror *types.Mirror) error {
-	logger.Infof("detachPortFromMirror - called")
-
 	err := ovsDriver.DetachPortFromMirror(portUUIDStr, mirror.Name)
 	if err != nil {
-		logger.Infof("detachPortFromMirror - DetachPortFromMirror for mirror %s returned an ERROR: %v", mirror.Name, err)
 		return err
 	}
-	logger.Infof("detachPortFromMirror - DetachPortFromMirror - DONE")
 
 	return nil
 }
@@ -155,24 +139,18 @@ func CmdAdd(args *skel.CmdArgs) error {
 
 // cleanPorts removes all ports whose interfaces have an error.
 func cleanPorts(ovsDriver *ovsdb.OvsBridgeDriver) error {
-	logger.Info("cleanPorts called")
 	ifaces, err := ovsDriver.FindInterfacesWithError()
-	logger.Infof("cleanPorts - ifaces %#v", ifaces)
 	if err != nil {
-		logger.Infof("cleanPorts - FindInterfacesWithError returned error %#v", err)
 		return fmt.Errorf("clean ports: %v", err)
 	}
 	for _, iface := range ifaces {
-		logger.Infof("cleanPorts - iterating over iface %#v", iface)
 		log.Printf("Info: interface %s has error: removing corresponding port", iface)
 		if err := ovsDriver.DeletePort(iface); err != nil {
-			logger.Infof("cleanPorts - DeletePort returned error %#v", err)
 			// Don't return an error here, just log its occurrence.
 			// Something else may have removed the port already.
 			log.Printf("Error: %v\n", err)
 		}
 	}
-	logger.Info("cleanPorts - completed")
 	return nil
 }
 
@@ -260,7 +238,6 @@ func CmdCheck(args *skel.CmdArgs) error {
 	if err != nil {
 		return err
 	}
-	logger.Infof("cmdCheck - netconf parsed from StdinData is: %#v", netconf)
 
 	ovsDriver, err := ovsdb.NewOvsBridgeDriver(netconf.BrName, netconf.SocketFile)
 	if err != nil {
@@ -272,10 +249,8 @@ func CmdCheck(args *skel.CmdArgs) error {
 		return fmt.Errorf("cannot get existing portUuid from db %v", err)
 	}
 
-	logger.Info("cmdCheck - interating all mirrors")
 	for _, mirror := range netconf.Mirrors {
 
-		logger.Infof("cmdCheck - Check mirror %s with ports", mirror.Name)
 		mirrorExist, err := ovsDriver.CheckMirrorProducerWithPorts(mirror.Name, mirror.Egress, mirror.Ingress, portUUID)
 		if err != nil {
 			return err
