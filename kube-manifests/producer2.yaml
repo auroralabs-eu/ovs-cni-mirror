@@ -32,13 +32,6 @@ spec:
         }
       ]
     }'
-
-#     Name       string `json:"name"`
-# BridgeName string `json:"bridgeName"`
-# IP         string `json:"ip"`
-# MAC        string `json:"mac"`
-# Peppino    string `json:"peppino"`
-
 ---
 apiVersion: apps/v1
 kind: Deployment

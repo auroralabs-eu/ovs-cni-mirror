@@ -1,3 +1,4 @@
 #!/bin/bash
 
-cp plugin /out/plugin
+cp producer /out/ovs-cni-mirror-producer
+cp consumer /out/ovs-cni-mirror-consumer

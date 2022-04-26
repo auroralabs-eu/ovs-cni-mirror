@@ -32,6 +32,7 @@ import (
 	"github.com/containernetworking/cni/pkg/skel"
 	cnitypes "github.com/containernetworking/cni/pkg/types"
 	current "github.com/containernetworking/cni/pkg/types/100"
+	"github.com/containernetworking/plugins/pkg/ns"
 
 	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/ovsdb"
 	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/types"
@@ -45,7 +46,7 @@ func init() {
 	// must ensure that the goroutine does not jump from OS thread to thread
 	runtime.LockOSThread()
 
-	logger = InitLogger("/home/master/ovs-logs/producer.log")
+	logger = InitLogger("/home/master/ovs-logs/consumer.log")
 	defer logger.Sync()
 	logger.Info("Starting PLUGIN....")
 }
@@ -71,18 +72,18 @@ func getPortUUID(ovsDriver *ovsdb.OvsBridgeDriver, interfaces []*current.Interfa
 		}
 	}
 
-	return "", errors.New("cannot find port in db")
+	return "", errors.New("Cannot find port in db")
 }
 
 func attachPortToMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mirror *types.Mirror) error {
 	logger.Infof("attachPortToMirror - called")
 
-	err := ovsDriver.AttachPortToMirror(portUUIDStr, mirror.Name, mirror.Ingress, mirror.Egress)
+	err := ovsDriver.AttachPortToMirrorConsumer(portUUIDStr, mirror.Name)
 	if err != nil {
 		logger.Infof("attachPortToMirror - AttachPortToMirror for mirror %s returned an ERROR: %v", mirror.Name, err)
 		return err
 	}
-	logger.Infof("attachPortToMirror - AttachPortToMirror - DONE")
+	logger.Info("attachPortToMirror - AttachPortToMirror - DONE")
 
 	return nil
 }
@@ -122,6 +123,12 @@ func CmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
+	contNetns, err := ns.GetNS(args.Netns)
+	if err != nil {
+		return fmt.Errorf("failed to open netns %q: %v", args.Netns, err)
+	}
+	defer contNetns.Close()
+
 	portUUID, err := getPortUUID(ovsDriver, netconf.PrevResult.Interfaces)
 	if err != nil {
 		return fmt.Errorf("cannot get existing portUuid from db %v", err)
@@ -137,6 +144,16 @@ func CmdAdd(args *skel.CmdArgs) error {
 			return fmt.Errorf("cannot create mirror %s: %v ", mirror.Name, err)
 		}
 		logger.Infof("cmdAdd - CreateMirror - success %s", mirror.Name)
+
+		alreadyAttached, err := ovsDriver.IsMirrorConsumerAlreadyAttached(mirror.Name)
+		if err != nil {
+			logger.Infof("cmdAdd - IsMirrorConsumerAlreadyAttached %s returned an error", mirror.Name)
+			return fmt.Errorf("cannot check if mirror %s has already an output port with error: %v ", mirror.Name, err)
+		}
+		if alreadyAttached {
+			logger.Info("cmdAdd - IsMirrorConsumerAlreadyAttached, cannot continue")
+			return fmt.Errorf("cannot attach port %s to mirror %s because there is already another port: %v", portUUID, mirror.Name, err)
+		}
 
 		logger.Infof("cmdAdd - attachPortToMirror - calling for mirror: %s", mirror.Name)
 		if err = attachPortToMirror(ovsDriver, portUUID, mirror); err != nil {
@@ -276,7 +293,7 @@ func CmdCheck(args *skel.CmdArgs) error {
 	for _, mirror := range netconf.Mirrors {
 
 		logger.Infof("cmdCheck - Check mirror %s with ports", mirror.Name)
-		mirrorExist, err := ovsDriver.CheckMirrorWithPorts(mirror.Name, mirror.Egress, mirror.Ingress, portUUID)
+		mirrorExist, err := ovsDriver.CheckMirrorConsumerWithPorts(mirror.Name, portUUID)
 		if err != nil {
 			return err
 		}

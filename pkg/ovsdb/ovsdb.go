@@ -302,14 +302,27 @@ func (ovsd *OvsBridgeDriver) DeleteMirror(bridgeName, mirrorName string) error {
 	return nil
 }
 
-func (ovsd *OvsBridgeDriver) AttachPortToMirror(portUUIDStr, mirrorName string, ingress, egress bool) error {
+func (ovsd *OvsBridgeDriver) AttachPortToMirrorProducer(portUUIDStr, mirrorName string, ingress, egress bool) error {
 	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
 
 	if !ingress && !egress {
 		return errors.New("a mirror must have either a ingress or an egress or both")
 	}
 
-	attachPortMirrorOp := attachPortToMirrorOperation(portUUID, mirrorName, ingress, egress)
+	attachPortMirrorOp := attachPortToMirrorProducerOperation(portUUID, mirrorName, ingress, egress)
+
+	logger.Infof("AttachPortToMirror - attachPortMirrorOp: %#v", attachPortMirrorOp)
+	// Perform OVS transaction
+	operations := []ovsdb.Operation{*attachPortMirrorOp}
+
+	_, err := ovsd.ovsdbTransact(operations)
+	return err
+}
+
+func (ovsd *OvsBridgeDriver) AttachPortToMirrorConsumer(portUUIDStr, mirrorName string) error {
+	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
+
+	attachPortMirrorOp := attachPortToMirrorConsumerOperation(portUUID, mirrorName)
 
 	logger.Infof("AttachPortToMirror - attachPortMirrorOp: %#v", attachPortMirrorOp)
 	// Perform OVS transaction
@@ -324,7 +337,7 @@ func (ovsd *OvsBridgeDriver) DetachPortFromMirror(portUUIDStr, mirrorName string
 
 	mutateMirrorOp := detachPortFromMirrorOperation(portUUID, mirrorName)
 
-	logger.Infof("AttachPortToMirror - mutateMirrorOp: %#v", mutateMirrorOp)
+	logger.Infof("DetachPortFromMirror - mutateMirrorOp: %#v", mutateMirrorOp)
 	// Perform OVS transaction
 	operations := []ovsdb.Operation{*mutateMirrorOp}
 
@@ -360,7 +373,28 @@ func (ovsd *OvsBridgeDriver) GetPortUUID(portName string) (ovsdb.UUID, error) {
 	return portUUID, nil
 }
 
-func (ovsd *OvsDriver) CheckMirrorWithPorts(mirrorName string, ingress, egress bool, portUUIDStr string) (bool, error) {
+func (ovsd *OvsDriver) IsMirrorConsumerAlreadyAttached(mirrorName string) (bool, error) {
+	logger.Infof("IsMirrorConsumerAlreadyAttached - mirrorName: %s", mirrorName)
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	row, err := ovsd.findByCondition("Mirror", condition, nil)
+	if err != nil {
+		return false, err
+	}
+
+	logger.Infof("IsMirrorConsumerAlreadyAttached - row: %#v", row)
+
+	outputPorts, err := convertToArray(row["output_port"])
+	if err != nil {
+		return false, fmt.Errorf("cannot convert output_port to an array error: %v", err)
+	}
+
+	if len(outputPorts) == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (ovsd *OvsDriver) CheckMirrorProducerWithPorts(mirrorName string, ingress, egress bool, portUUIDStr string) (bool, error) {
 	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
 
 	var conditions []ovsdb.Condition = []ovsdb.Condition{}
@@ -403,6 +437,20 @@ func (ovsd *OvsDriver) CheckMirrorWithPorts(mirrorName string, ingress, egress b
 		return false, nil
 	}
 
+	return true, nil
+}
+
+func (ovsd *OvsDriver) CheckMirrorConsumerWithPorts(mirrorName string, portUUIDStr string) (bool, error) {
+	portUUID := ovsdb.UUID{GoUUID: portUUIDStr}
+
+	// output_port = Output port for selected packets
+	conditionOutput := ovsdb.NewCondition("output_port", ovsdb.ConditionIncludes, portUUID)
+
+	_, err := ovsd.findByCondition("Mirror", conditionOutput, []string{"name"})
+
+	if err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -599,7 +647,7 @@ func createMirrorOperation(mirrorName string) (ovsdb.UUID, *ovsdb.Operation) {
 	return mirrorUUID, &mirrorOp
 }
 
-func attachPortToMirrorOperation(portUUID ovsdb.UUID, mirrorName string, ingress, egress bool) *ovsdb.Operation {
+func attachPortToMirrorProducerOperation(portUUID ovsdb.UUID, mirrorName string, ingress, egress bool) *ovsdb.Operation {
 	// mutate the Ingress and Egress columns of the row in the Mirror table
 	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
 	var mutations []ovsdb.Mutation = []ovsdb.Mutation{}
@@ -619,6 +667,23 @@ func attachPortToMirrorOperation(portUUID ovsdb.UUID, mirrorName string, ingress
 		Op:        "mutate",
 		Table:     "Mirror",
 		Mutations: mutations,
+		Where:     []ovsdb.Condition{condition},
+	}
+	logger.Infof("cmdAdd - CreateMirrorPort() - attachPortToMirrorOperation mutateOp: %#v", mutateOp)
+
+	return &mutateOp
+}
+
+func attachPortToMirrorConsumerOperation(portUUID ovsdb.UUID, mirrorName string) *ovsdb.Operation {
+	mutateSet, _ := ovsdb.NewOvsSet(portUUID)
+	// output_port = Output port for selected packets
+	mutation := ovsdb.NewMutation("output_port", ovsdb.MutateOperationInsert, mutateSet)
+
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	mutateOp := ovsdb.Operation{
+		Op:        "mutate",
+		Table:     "Mirror",
+		Mutations: []ovsdb.Mutation{*mutation},
 		Where:     []ovsdb.Condition{condition},
 	}
 	logger.Infof("cmdAdd - CreateMirrorPort() - attachPortToMirrorOperation mutateOp: %#v", mutateOp)
@@ -654,6 +719,21 @@ func detachPortFromMirrorOperation(portUUID ovsdb.UUID, mirrorName string) *ovsd
 		Op:        "mutate",
 		Table:     "Mirror",
 		Mutations: []ovsdb.Mutation{*mutationIngress, *mutationEgress},
+		Where:     []ovsdb.Condition{condition},
+	}
+
+	return &mutateOp
+}
+
+func detachPortFromMirrorConsumerOperation(portUUID ovsdb.UUID, mirrorName string) *ovsdb.Operation {
+	// mutate the Ports column of the row in the Bridge table
+	// output_port = Output port for selected packets
+	mutation := ovsdb.NewMutation("output_port", ovsdb.MutateOperationDelete, portUUID)
+	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
+	mutateOp := ovsdb.Operation{
+		Op:        "mutate",
+		Table:     "Mirror",
+		Mutations: []ovsdb.Mutation{*mutation},
 		Where:     []ovsdb.Condition{condition},
 	}
 
