@@ -442,10 +442,6 @@ func (ovsd *OvsDriver) CheckMirrorConsumerWithPorts(mirrorName string, portUUIDS
 // IsMirrorPresent Check if the Mirror entry already exists
 func (ovsd *OvsDriver) IsMirrorPresent(mirrorName string) (bool, error) {
 	condition := ovsdb.NewCondition("name", ovsdb.ConditionEqual, mirrorName)
-	// _, err := ovsd.findByCondition("Mirror", condition, []string{"name"})
-	// if err != nil {
-	// 	return false, err
-	// }
 	selectOp := []ovsdb.Operation{{
 		Op:      "select",
 		Table:   "Mirror",
