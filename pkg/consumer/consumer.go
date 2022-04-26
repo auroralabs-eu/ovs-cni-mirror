@@ -27,7 +27,6 @@ import (
 	"runtime"
 
 	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/config"
-	"go.uber.org/zap"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	cnitypes "github.com/containernetworking/cni/pkg/types"
@@ -37,17 +36,11 @@ import (
 	"github.com/k8snetworkplumbingwg/ovs-cni/pkg/types"
 )
 
-var logger *zap.SugaredLogger
-
 func init() {
 	// this ensures that main runs only on main thread (thread group leader).
 	// since namespace ops (unshare, setns) are done for a single thread, we
 	// must ensure that the goroutine does not jump from OS thread to thread
 	runtime.LockOSThread()
-
-	logger = InitLogger("/home/master/ovs-logs/consumer.log")
-	defer logger.Sync()
-	logger.Info("Starting PLUGIN....")
 }
 
 func logCall(command string, args *skel.CmdArgs) {
@@ -87,19 +80,11 @@ func detachPortFromMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, 
 // CmdAdd add handler for attaching container into network
 func CmdAdd(args *skel.CmdArgs) error {
 	logCall("ADD", args)
-	logger.Info("--------------cmdAdd--------------")
-	logger.Info(args.IfName)
-	logger.Info(args.ContainerID)
-	logger.Info(args.Netns)
-	logger.Info(args.Args)
-	logger.Info(args.Path)
-	logger.Info(fmt.Sprintf("the config data: %s\n", args.StdinData))
 
 	netconf, err := config.LoadConf(args.StdinData)
 	if err != nil {
 		return err
 	}
-	logger.Infof("cmdAdd - netconf parsed from StdinData is: %#v", netconf)
 
 	ovsDriver, err := ovsdb.NewOvsBridgeDriver(netconf.BrName, netconf.SocketFile)
 	if err != nil {
@@ -111,30 +96,22 @@ func CmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("cannot get existing portUuid from db %v", err)
 	}
 
-	logger.Info("cmdAdd - interating all mirrors")
 	for _, mirror := range netconf.Mirrors {
 
-		logger.Infof("cmdAdd - calling CreateMirror %s", mirror.Name)
 		err = ovsDriver.CreateMirror(netconf.BrName, mirror.Name)
 		if err != nil {
-			logger.Infof("cmdAdd - CreateMirror %s returned an error", mirror.Name)
 			return fmt.Errorf("cannot create mirror %s: %v ", mirror.Name, err)
 		}
-		logger.Infof("cmdAdd - CreateMirror - success %s", mirror.Name)
 
 		alreadyAttached, err := ovsDriver.IsMirrorConsumerAlreadyAttached(mirror.Name)
 		if err != nil {
-			logger.Infof("cmdAdd - IsMirrorConsumerAlreadyAttached %s returned an error", mirror.Name)
 			return fmt.Errorf("cannot check if mirror %s has already an output port with error: %v ", mirror.Name, err)
 		}
 		if alreadyAttached {
-			logger.Info("cmdAdd - IsMirrorConsumerAlreadyAttached, cannot continue")
 			return fmt.Errorf("cannot attach port %s to mirror %s because there is already another port: %v", portUUID, mirror.Name, err)
 		}
 
-		logger.Infof("cmdAdd - attachPortToMirror - calling for mirror: %s", mirror.Name)
 		if err = attachPortToMirror(ovsDriver, portUUID, mirror); err != nil {
-			logger.Infof("cmdAdd - attachPortToMirror returned an error for mirror %s", mirror.Name)
 			return fmt.Errorf("cannot attach port %s to mirror %s: %v", portUUID, mirror.Name, err)
 		}
 	}
@@ -143,7 +120,6 @@ func CmdAdd(args *skel.CmdArgs) error {
 		Interfaces: netconf.PrevResult.Interfaces,
 	}
 
-	logger.Infof("cmdAdd - result: %#v", result)
 	return cnitypes.PrintResult(result, netconf.CNIVersion)
 }
 
@@ -167,20 +143,11 @@ func cleanPorts(ovsDriver *ovsdb.OvsBridgeDriver) error {
 // CmdDel remove handler for deleting container from network
 func CmdDel(args *skel.CmdArgs) error {
 	logCall("DEL", args)
-	logger.Info("--------------CmdDel--------------")
-	logger.Info(args.IfName)
-	logger.Info(args.ContainerID)
-	logger.Info(args.Netns)
-	logger.Info(args.Args)
-	logger.Info(args.Path)
-	logger.Info(fmt.Sprintf("the config data: %s\n", args.StdinData))
-	logger.Info("**********************************")
 
 	netconf, err := config.LoadConf(args.StdinData)
 	if err != nil {
 		return err
 	}
-	logger.Infof("cmdDel - netconf parsed from StdinData is: %#v", netconf)
 
 	ovsDriver, err := ovsdb.NewOvsBridgeDriver(netconf.BrName, netconf.SocketFile)
 	if err != nil {
@@ -192,7 +159,6 @@ func CmdDel(args *skel.CmdArgs) error {
 		return fmt.Errorf("cannot get existing portUuid from db %v", err)
 	}
 
-	logger.Info("cmdDel - interating all mirrors")
 	for _, mirror := range netconf.Mirrors {
 
 		mirrorExist, err := ovsDriver.IsMirrorPresent(mirror.Name)
@@ -205,20 +171,15 @@ func CmdDel(args *skel.CmdArgs) error {
 		}
 
 		if err = detachPortFromMirror(ovsDriver, portUUID, mirror); err != nil {
-			logger.Infof("cmdDel - detachPortFromMirror returned an error for mirror %s", mirror.Name)
 			return fmt.Errorf("cannot detach port %s from mirror %s: %v", portUUID, mirror.Name, err)
 		}
 
-		logger.Infof("cmdDel - calling DeleteMirror %s", mirror.Name)
 		err = ovsDriver.DeleteMirror(netconf.BrName, mirror.Name)
 		if err != nil {
-			logger.Infof("cmdDel - DeleteMirror %s returned an error", mirror.Name)
 			return fmt.Errorf("cannot create mirror %s: %v ", mirror.Name, err)
 		}
-		logger.Infof("cmdDel - DeleteMirror - success %s", mirror.Name)
 	}
 
-	logger.Info("cmdDel - calling cleanPorts")
 	if err := cleanPorts(ovsDriver); err != nil {
 		return err
 	}
@@ -227,22 +188,12 @@ func CmdDel(args *skel.CmdArgs) error {
 		Interfaces: netconf.PrevResult.Interfaces,
 	}
 
-	logger.Infof("cmdDel - result: %#v", result)
 	return cnitypes.PrintResult(result, netconf.CNIVersion)
 }
 
 // CmdCheck check handler to make sure networking is as expected.
 func CmdCheck(args *skel.CmdArgs) error {
 	logCall("CHECK", args)
-
-	logger.Info("--------------cmdCheck--------------")
-	logger.Info(args.IfName)
-	logger.Info(args.ContainerID)
-	logger.Info(args.Netns)
-	logger.Info(args.Args)
-	logger.Info(args.Path)
-	logger.Info(fmt.Sprintf("the config data: %s\n", args.StdinData))
-	logger.Info("**********************************")
 
 	netconf, err := config.LoadConf(args.StdinData)
 	if err != nil {
