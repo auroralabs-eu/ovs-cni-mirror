@@ -76,7 +76,7 @@ func attachPortToMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mi
 }
 
 func detachPortFromMirror(ovsDriver *ovsdb.OvsBridgeDriver, portUUIDStr string, mirror *types.Mirror) error {
-	err := ovsDriver.DetachPortFromMirror(portUUIDStr, mirror.Name)
+	err := ovsDriver.DetachPortFromMirrorProducer(portUUIDStr, mirror.Name)
 	if err != nil {
 		return err
 	}
