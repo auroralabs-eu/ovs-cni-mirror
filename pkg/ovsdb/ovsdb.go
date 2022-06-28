@@ -206,8 +206,11 @@ func (ovsd *OvsBridgeDriver) CreateMirror(bridgeName, mirrorName string) error {
 	}
 
 	if !mirrorExist {
+		// Insert a Mirror and add it into Bridges
+		// as 2 operations in a transaction.
+		// The first one returns 'mirrorUUID' to referece the new inserted row
+		// in the second operation.
 		mirrorUUID, mirrorOp := createMirrorOperation(mirrorName)
-
 		attachMirrorOp := attachMirrorOperation(mirrorUUID, bridgeName)
 
 		// Perform OVS transaction
@@ -581,7 +584,10 @@ func (ovsd *OvsDriver) findByCondition(table string, condition ovsdb.Condition, 
 }
 
 func createMirrorOperation(mirrorName string) (ovsdb.UUID, *ovsdb.Operation) {
-	mirrorUUIDStr := mirrorName
+	// Create an operation 'named-uuid' with a simple string as defined in RFC7047.
+	// Spec states that 'uuid-name is only meaningful within the scope of a single transaction'.
+	// So we use a simple constant string.
+	mirrorUUIDStr := "newMirror"
 	mirrorUUID := ovsdb.UUID{GoUUID: mirrorUUIDStr}
 
 	mirror := make(map[string]interface{})
